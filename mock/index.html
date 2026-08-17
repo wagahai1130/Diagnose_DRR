@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>災害リスク診断</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --border: #d8dbe0; --text: #1a1c1f;
+    --muted: #5b6169; --accent: #1a4fa0; --ok: #14733c; --ng: #b3261e; --warn: #8a6100;
+    --code-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --panel: #1e2126; --border: #343a42; --text: #e8eaed;
+      --muted: #9aa2ad; --accent: #7aa6f0; --ok: #6bd68f; --ng: #f28b82; --warn: #f5c04a;
+      --code-bg: #14161a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 14px; line-height: 1.6;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; }
+  header .tag {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 1px 9px;
+  }
+  main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 16px; padding: 16px; align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .panel + .panel { margin-top: 16px; }
+  h2 { font-size: 13px; margin: 0 0 12px; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
+  .field { margin-bottom: 14px; }
+  label.title { display: block; font-weight: 600; margin-bottom: 3px; }
+  .req { color: var(--ng); font-size: 11px; margin-left: 4px; }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px;
+    background: var(--bg); color: var(--text); font: inherit;
+  }
+  textarea { min-height: 90px; resize: vertical; }
+  .choice { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  .choice input { margin: 0; }
+  button {
+    font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 6px;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.sub { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .settings { font-size: 12px; }
+  .settings label { color: var(--muted); display: block; margin: 8px 0 2px; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; overflow-x: auto; font-size: 12px; margin: 0;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  .verdict { font-weight: 700; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; }
+  .verdict.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .verdict.ng { background: color-mix(in srgb, var(--ng) 15%, transparent); color: var(--ng); }
+  ul.issues { margin: 0; padding-left: 20px; }
+  ul.issues li { margin-bottom: 5px; }
+  ul.issues.warn li { color: var(--warn); }
+  ul.issues.bad li { color: var(--ng); }
+  .timeline { font-size: 12px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+  .timeline div { padding: 1px 0; }
+  .md h1, .md h2, .md h3 { margin: 12px 0 6px; }
+  .md h1 { font-size: 19px; } .md h2 { font-size: 16px; } .md h3 { font-size: 14px; }
+  .md ul { padding-left: 22px; margin: 6px 0; }
+  .md code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .md table { border-collapse: collapse; margin: 10px 0; font-size: 13px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .md th { background: var(--code-bg); font-weight: 600; }
+  .art a { color: var(--accent); }
+  .art img.map {
+    display: block; width: 100%; max-width: 640px; height: auto;
+    border: 1px solid var(--border); border-radius: 6px; margin-top: 6px;
+  }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>災害リスク診断</h1>
+  <span class="tag">国土地理院の公開データによる地点別の災害リスク判定</span>
+</header>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>入力</h2>
+      <form id="form"></form>
+      <div class="row" style="margin-top:14px">
+        <button id="submit" type="button">診断する</button>
+        <button id="continue" type="button" class="sub" hidden>続けて質問する</button>
+      </div>
+    </div>
+
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>診断結果</h2>
+      <div id="verdict" class="empty">未実行</div>
+      <div id="issues"></div>
+      <div id="outputs" class="md empty" style="margin-top:12px">—</div>
+      <div id="artifacts" class="art"></div>
+    </div>
+
+    <details class="panel">
+      <summary style="cursor:pointer;font-size:13px;color:var(--muted)">処理ログ</summary>
+      <div style="margin-top:12px">
+        <div id="timeline" class="timeline empty">—</div>
+      </div>
+    </details>
+  </div>
+</main>
+
+<script>
+const SCHEMA = __SCHEMA_JSON__;
+
+const $ = (id) => document.getElementById(id);
+
+let lastExchange = null;   // 会話を続ける用
+let conversationHistories = [];
+let sessionId = null;
+
+// ---- フォーム自動生成 -------------------------------------------------
+function buildForm() {
+  const form = $('form');
+  for (const [key, def] of Object.entries(SCHEMA)) {
+    if (def.type === 'hidden') continue;
+    // 会話履歴は画面に出さない
+    if (key === 'conversation_history') continue;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+
+    const label = document.createElement('label');
+    label.className = 'title';
+    label.textContent = def.title || key;
+    label.htmlFor = 'f_' + key;
+    if (def.required) {
+      const req = document.createElement('span');
+      req.className = 'req';
+      req.textContent = '必須';
+      label.appendChild(req);
+    }
+    wrap.appendChild(label);
+
+    if (def.desc) {
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = def.desc;
+      wrap.appendChild(desc);
+    }
+
+    wrap.appendChild(buildControl(key, def));
+    form.appendChild(wrap);
+  }
+}
+
+function buildControl(key, def) {
+  const id = 'f_' + key;
+  if (def.type === 'textarea') {
+    const el = document.createElement('textarea');
+    el.id = id;
+    el.value = def.default_value ?? '';
+    if (def.max_length) el.maxLength = def.max_length;
+    return el;
+  }
+  if (def.type === 'select') {
+    const el = document.createElement('select');
+    el.id = id;
+    if (!def.required) el.appendChild(new Option('選択してください', ''));
+    for (const item of def.items || []) el.appendChild(new Option(item.title, item.value));
+    if (def.default_value !== undefined) el.value = String(def.default_value);
+    return el;
+  }
+  if (def.type === 'checkbox' || def.type === 'radio') {
+    const box = document.createElement('div');
+    box.id = id;
+    (def.items || []).forEach((item, i) => {
+      const line = document.createElement('div');
+      line.className = 'choice';
+      const input = document.createElement('input');
+      input.type = def.type;
+      input.name = key;
+      input.value = item.value;
+      input.id = id + '_' + i;
+      if (String(def.default_value) === String(item.value)) input.checked = true;
+      const lab = document.createElement('label');
+      lab.htmlFor = input.id;
+      lab.textContent = item.title;
+      line.append(input, lab);
+      box.appendChild(line);
+    });
+    return box;
+  }
+  if (def.type === 'file') {
+    const el = document.createElement('input');
+    el.type = 'file';
+    el.id = id;
+    if (def.accept) el.accept = def.accept;
+    if (def.multiple) el.multiple = true;
+    return el;
+  }
+  const el = document.createElement('input');
+  el.type = def.type === 'number' ? 'number' : 'text';
+  el.id = id;
+  if (def.default_value !== undefined) el.value = def.default_value;
+  if (def.min !== undefined) el.min = def.min;
+  if (def.max !== undefined) el.max = def.max;
+  if (def.max_length) el.maxLength = def.max_length;
+  return el;
+}
+
+// ---- 入力値の組み立て -------------------------------------------------
+function parseSize(text) {
+  const m = String(text || '').trim().match(/^([\d.]+)\s*(KB|MB|GB)$/i);
+  if (!m) return null;
+  const unit = { kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 }[m[2].toLowerCase()];
+  return parseFloat(m[1]) * unit;
+}
+
+// 数値に見える値は数値として送る
+function coerce(value) {
+  if (value === '' || value === null) return value;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function buildInputs() {
+  const inputs = {};
+  const files = [];
+  const errors = [];
+
+  for (const [key, def] of Object.entries(SCHEMA)) {
+    if (key === 'conversation_history') continue;
+
+    if (def.type === 'hidden') {
+      inputs[key] = coerce(def.default_value);
+      continue;
+    }
+    if (def.type === 'checkbox' || def.type === 'radio') {
+      const checked = [...document.querySelectorAll(`input[name="${key}"]:checked`)].map((e) => e.value);
+      if (def.required && checked.length === 0) errors.push(`${def.title}: 選択してください。`);
+      if (checked.length === 0) continue;
+      inputs[key] = def.type === 'checkbox' ? checked.join(',') : coerce(checked[0]);
+      continue;
+    }
+    if (def.type === 'file') {
+      const picked = [...($('f_' + key).files || [])];
+      if (def.required && picked.length === 0) errors.push(`${def.title}: ファイルを選択してください。`);
+      const limit = def.max_file_count ?? (def.multiple ? 100 : 1);
+      if (picked.length > limit) errors.push(`${def.title}: ファイルは ${limit} 個までです。`);
+      const maxSize = parseSize(def.max_size);
+      const encoded = [];
+      for (const file of picked) {
+        const content = await readFileAsBase64(file);
+        // 上限は Base64 変換後のサイズで判定する
+        if (maxSize && content.length > maxSize) {
+          errors.push(`${def.title}: ${file.name} が上限 ${def.max_size} を超えています（Base64 変換後で判定）。`);
+        }
+        encoded.push({ filename: file.name, content });
+      }
+      if (encoded.length) files.push({ key, files: encoded });
+      continue;
+    }
+
+    const el = $('f_' + key);
+    const raw = el.value;
+    if (def.required && raw === '') { errors.push(`${def.title}: 入力してください。`); continue; }
+    if (raw === '') continue;
+    if (def.min_length && raw.length < def.min_length) errors.push(`${def.title}: ${def.min_length} 文字以上にしてください。`);
+    if (def.type === 'number') {
+      const num = Number(raw);
+      if (def.min !== undefined && num < def.min) errors.push(`${def.title}: ${def.min} 以上にしてください。`);
+      if (def.max !== undefined && num > def.max) errors.push(`${def.title}: ${def.max} 以下にしてください。`);
+      inputs[key] = num;
+    } else {
+      inputs[key] = def.type === 'select' ? coerce(raw) : raw;
+    }
+  }
+
+  if (files.length) inputs.files = files;
+  if (conversationHistories.length) inputs.conversation_histories = conversationHistories;
+  return { inputs, errors };
+}
+
+// ---- 簡易 Markdown 表示 -----------------------------------------------
+function renderMarkdown(text) {
+  const escape = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const out = [];
+  let inList = false;
+  const lines = String(text).split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // 表: | a | b | の連続行をまとめて <table> にする
+    if (line.trim().startsWith('|')) {
+      if (inList) { out.push('</ul>'); inList = false; }
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+        i++;
+      }
+      i--;
+      const isSeparator = (cells) => cells.every((c) => /^:?-{2,}:?$/.test(c));
+      out.push('<table>');
+      rows.forEach((cells, index) => {
+        if (isSeparator(cells)) return;
+        const tag = index === 0 ? 'th' : 'td';
+        const tds = cells.map((c) => `<${tag}>${inline(escape(c))}</${tag}>`).join('');
+        out.push(`<tr>${tds}</tr>`);
+      });
+      out.push('</table>');
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + inline(escape(bullet[1])) + '</li>');
+      continue;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+    if (heading) {
+      const level = heading[1].length;
+      out.push(`<h${level}>` + inline(escape(heading[2])) + `</h${level}>`);
+    } else if (line.trim() === '') {
+      out.push('');
+    } else {
+      out.push('<p>' + inline(escape(line)) + '</p>');
+    }
+  }
+  if (inList) out.push('</ul>');
+  return out.join('\n');
+
+  function inline(s) {
+    return s.replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  }
+}
+
+function renderIssues(violations, warnings) {
+  const box = $('issues');
+  box.innerHTML = '';
+  if (violations.length) {
+    const heading = document.createElement('div');
+    heading.textContent = '問題:';
+    const list = document.createElement('ul');
+    list.className = 'issues bad';
+    for (const v of violations) {
+      const li = document.createElement('li');
+      li.textContent = v;
+      list.appendChild(li);
+    }
+    box.append(heading, list);
+  }
+}
+
+function renderArtifacts(artifacts) {
+  const box = $('artifacts');
+  box.innerHTML = '';
+  if (!Array.isArray(artifacts) || !artifacts.length) return;
+
+  const images = artifacts.filter((a) => /\.(png|jpe?g|gif|webp)$/i.test(a.display_name));
+  const files = artifacts.filter((a) => !images.includes(a));
+
+  // 地図は落とさせずにその場で見せる
+  for (const item of images) {
+    const heading = document.createElement('h2');
+    heading.textContent = '地図';
+    heading.style.marginTop = '16px';
+    const img = document.createElement('img');
+    const ext = item.display_name.split('.').pop().toLowerCase();
+    const mime = ext === 'jpg' ? 'jpeg' : ext;
+    img.src = `data:image/${mime};base64,` + item.contents;
+    img.alt = '診断地点を中心としたハザードマップ';
+    img.className = 'map';
+    box.append(heading, img);
+  }
+
+  if (files.length) {
+    const heading = document.createElement('h2');
+    heading.textContent = '生成ファイル';
+    heading.style.marginTop = '16px';
+    box.appendChild(heading);
+    for (const item of files) {
+      const link = document.createElement('a');
+      link.href = 'data:application/octet-stream;base64,' + item.contents;
+      link.download = item.display_name;
+      link.textContent = item.display_name;
+      const line = document.createElement('div');
+      line.appendChild(link);
+      box.appendChild(line);
+    }
+  }
+}
+
+// ---- 実行 -------------------------------------------------------------
+async function execute() {
+  const { inputs, errors } = await buildInputs();
+  if (errors.length) {
+    $('verdict').className = 'verdict ng';
+    $('verdict').textContent = '入力エラー';
+    renderIssues(errors, []);
+    return;
+  }
+
+  $('submit').disabled = true;
+  $('verdict').className = '';
+  $('verdict').textContent = '診断中...';
+
+  let data;
+  try {
+    // /ui でも /mock でも動くように、現在のパスを基準にする
+    const apiBase = window.location.pathname.replace(/\/+$/, '');
+    const response = await fetch(apiBase + '/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs, sessionId }),
+    });
+    data = await response.json();
+  } catch (e) {
+    $('verdict').className = 'verdict ng';
+    $('verdict').textContent = '診断に失敗した: ' + e;
+    $('submit').disabled = false;
+    return;
+  }
+  $('submit').disabled = false;
+
+  sessionId = data.sessionId || sessionId;
+  const violations = data.violations || [];
+  const ok = data.ok && !violations.length;
+
+  $('verdict').className = 'verdict ' + (ok ? 'ok' : 'ng');
+  $('verdict').textContent = ok
+    ? '診断完了'
+    : `診断に問題あり — ${violations.length} 件（status: ${data.status || '?'}）`;
+  renderIssues(ok ? [] : violations, []);
+
+  const result = data.result || {};
+  const outputs = typeof result === 'string' ? result : (result.outputs ?? '');
+  const outputsBox = $('outputs');
+  if (outputs) {
+    outputsBox.className = 'md';
+    outputsBox.innerHTML = renderMarkdown(outputs);
+  } else {
+    outputsBox.className = 'md empty';
+    outputsBox.textContent = JSON.stringify(result, null, 2) || '—';
+  }
+  renderArtifacts(result.artifacts);
+
+  const timelineBox = $('timeline');
+  timelineBox.className = 'timeline';
+  timelineBox.innerHTML = '';
+  for (const step of data.timeline || []) {
+    const line = document.createElement('div');
+    line.textContent = `+${String(step.at).padStart(5)}s  ${step.label}  ${step.detail}`;
+    timelineBox.appendChild(line);
+  }
+
+  if (outputs && SCHEMA.conversation_history) {
+    lastExchange = { input: JSON.stringify(inputs), output: outputs, createdDate: String(Date.now()) };
+    $('continue').hidden = false;
+  }
+}
+
+$('submit').onclick = execute;
+$('continue').onclick = () => {
+  if (lastExchange) conversationHistories = [...conversationHistories, lastExchange];
+  $('continue').hidden = true;
+  execute();
+};
+
+buildForm();
+</script>
+</body>
+</html>
