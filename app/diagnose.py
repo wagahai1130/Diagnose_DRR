@@ -23,6 +23,7 @@ class Diagnosis:
     elevation: Elevation = field(default_factory=lambda: Elevation(value=None))
     hazards: list[HazardResult] = field(default_factory=list)
     maps: list[tuple[str, bytes]] = field(default_factory=list)  # (ハザード名, PNG)
+    map_urls: list[tuple[str, str]] = field(default_factory=list)  # (ハザード名, 公開URL)
     floor: int | None = None
     conditions: list[str] = field(default_factory=list)
     conditions_note: str = ""  # 利用者の自由記述（信頼できない入力として扱う）

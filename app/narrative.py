@@ -168,16 +168,32 @@ def _hazard_table(diagnosis: Diagnosis) -> str:
     return "\n".join(rows)
 
 
-def _map_caption(diagnosis: Diagnosis) -> str:
-    if not diagnosis.maps:
+def _map_section(diagnosis: Diagnosis) -> str:
+    """地図を本文に画像として差し込む。
+
+    源内の Markdown 描画は data: URI を拒否するため、
+    自前の配信エンドポイント (/maps/<id>.png) の https URL を参照する。
+    公開 URL が分からない場合は画像を出さず、説明だけにする。
+    """
+    if not diagnosis.map_urls:
         return ""
-    names = [name for name, _png in diagnosis.maps]
+
+    names = [name for name, _url in diagnosis.map_urls]
     if names == ["該当する想定区域なし"]:
-        return "下の地図は、この地点を示したものである（重なる想定区域はない）。"
-    return (
-        f"下の地図は、この地点を中心に **{'、'.join(names)}** を"
-        f"それぞれ重ねたものである（計 {len(names)} 枚）。"
-    )
+        lead = "この地点を示した地図である（重なる想定区域はない）。"
+    else:
+        lead = (
+            f"この地点を中心に **{'、'.join(names)}** をそれぞれ重ねた地図である"
+            f"（計 {len(names)} 枚）。凡例は各図の左下に示す。"
+        )
+
+    blocks = [lead, ""]
+    for name, url in diagnosis.map_urls:
+        blocks.append(f"**{name}**")
+        blocks.append("")
+        blocks.append(f"![{name}]({url})")
+        blocks.append("")
+    return chr(10).join(blocks)
 
 
 def render_report(diagnosis: Diagnosis) -> str:
@@ -217,7 +233,7 @@ def render_report(diagnosis: Diagnosis) -> str:
 「区域外」は当該想定区域に該当しないこと、「対象外」は当該災害の想定区域図が
 この場所には作成されていないこと（内陸の津波など）を表す。
 
-{_map_caption(diagnosis)}
+{_map_section(diagnosis)}
 
 ### この地点について
 

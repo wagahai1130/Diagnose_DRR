@@ -1,19 +1,24 @@
-"""源内 Web に「行政実務用 AI アプリ」として登録される REST API。
+"""診断 API。
 
-源内 Web からのリクエスト:
-    POST <このアプリのエンドポイント>
+  POST /invoke        診断の実行
+  GET  /status/{id}   非同期実行の進捗と結果
+  GET  /schema        入力項目の定義
+  GET  /health        死活確認
+
+リクエスト:
+    POST /invoke
     Content-Type: application/json
-    x-api-key:  源内が Secrets Manager で管理しているキー
-    x-user-id:  Cognito sub から生成された安定ユーザー ID
+    x-api-key:  発行したキー
+    x-user-id:  利用者の識別子（任意）
     {"inputs": {...}, "sessionId": "<uuid-v4>"}
 
 応答は 2 通り:
     同期  : 200 {"outputs": "Markdown 文字列"}
     非同期: 202 {"outputs": ..., "request_id": ..., "status": "PENDING",
                  "status_url": "/status/<request_id>"}
-            → 源内が status_url を GET しに来る（同一オリジンの相対パス必須）
+            → 呼び出し元が status_url を GET して完了を待つ
 
-同期の既定タイムアウトは 29 秒。LLM を呼ぶなら非同期にすること。
+診断に 10〜20 秒かかるため既定は非同期。
 """
 
 from __future__ import annotations
@@ -22,9 +27,9 @@ import hmac
 import os
 
 from fastapi import APIRouter, FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from . import jobs, logic
+from . import jobs, logic, mapstore
 from .normalize import normalize
 from .schema import APP_DESCRIPTION, APP_NAME, REQUEST_SCHEMA
 
@@ -32,12 +37,12 @@ API_KEY = os.environ.get("EXAPP_API_KEY", "dev-local-key")
 REQUIRE_API_KEY = os.environ.get("EXAPP_REQUIRE_API_KEY", "1") != "0"
 DEFAULT_MODE = os.environ.get("EXAPP_MODE", "async")  # "async" | "sync"
 
-app = FastAPI(title=f"{APP_NAME}（源内 AI アプリ）", description=APP_DESCRIPTION, docs_url="/docs")
+app = FastAPI(title=APP_NAME, description=APP_DESCRIPTION, docs_url="/docs")
 api = APIRouter()
 
 
 def _unauthorized() -> JSONResponse:
-    # 源内側は本文の outputs をそのまま画面に出すので、原因が分かる文言にしておく
+    # outputs はそのまま画面に出るので、原因が分かる文言にしておく
     return JSONResponse(status_code=401, content={"outputs": "API キーが不正です。"})
 
 
@@ -58,7 +63,7 @@ async def invoke(
 
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 - 壊れた JSON も源内へ 400 で返す
+    except Exception:  # noqa: BLE001 - 壊れた JSON は 400 で返す
         return JSONResponse(status_code=400, content={"outputs": "JSON の形式が不正です。"})
 
     if not isinstance(body, dict) or not isinstance(body.get("inputs"), dict):
@@ -83,14 +88,12 @@ async def invoke(
 
     job = jobs.store.create()
     # 受付応答は必ず PENDING。job.status を読むと、処理が即座に終わった場合に
-    # COMPLETED が載ってしまい、源内側の 202 応答チェックに合わなくなる
     accepted = JSONResponse(
         status_code=202,
         content={
             "outputs": "リクエストを受け付けました",
             "request_id": job.request_id,
             "status": jobs.PENDING,
-            # 絶対 URL にすると源内側で拒否される
             "status_url": f"/status/{job.request_id}",
         },
     )
@@ -105,7 +108,6 @@ async def status(request_id: str, x_api_key: str | None = Header(default=None)):
 
     job = jobs.store.get(request_id)
     if job is None:
-        # 404 を返すと源内は再試行し続けるので、ERROR として終わらせる
         return JSONResponse(
             status_code=200,
             content={
@@ -121,9 +123,21 @@ async def status(request_id: str, x_api_key: str | None = Header(default=None)):
     return job.to_status_response()
 
 
+@api.get("/maps/{map_id}.png")
+async def map_image(map_id: str):
+    """生成した地図の配信。レポート本文から画像として参照される。
+
+    認証は掛けない。ID は推測困難な 32 桁で、内容は公開データの地図であるため。
+    """
+    png = mapstore.store.get(map_id)
+    if png is None:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
 @api.get("/schema")
 async def schema():
-    """源内のチーム管理画面「リクエスト形式」に貼る JSON。"""
     return REQUEST_SCHEMA
 
 

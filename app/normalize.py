@@ -1,15 +1,14 @@
-"""源内 Web から届く inputs を、扱いやすい形に正規化する。
+"""受け取った inputs を扱いやすい形に正規化する。
 
-源内側の実装とドキュメントで形が食い違う箇所があるので、ここで吸収する。
+呼び出し元によって形が揺れる箇所があるので、ここで吸収する。
 
 1) ファイル
-   ドキュメント(同期)     : inputs.files = [{"key": k, "files": [{"filename": f, "content": b64}]}]
-   ドキュメント(非同期)   : inputs.files = [{"key": k, "contents": b64, "filename": f}]
+   形1: inputs.files = [{"key": k, "files": [{"filename": f, "content": b64}]}]
+   形2: inputs.files = [{"key": k, "contents": b64, "filename": f}]
    → 両方を受け付ける。
 
 2) 会話履歴
-   登録 JSON に書くキー   : conversation_history   (単数)
-   実際に送られてくるキー : conversation_histories (複数) = [{"input", "output", "createdDate"}]
+   単数形 conversation_history / 複数形 conversation_histories の両方が来る
    → 両方を受け付ける。
 """
 

@@ -72,8 +72,8 @@ def test_no_selection_means_all_hazards():
     assert set(expand_hazard_keys([])) == set(hazard.LAYERS_BY_KEY)
 
 
-def test_checkbox_string_from_genai_expands():
-    # 源内はチェックボックスを "flood,sediment" の形で送ってくる
+def test_checkbox_string_expands():
+    # チェックボックスは "flood,sediment" の形で届く
     inputs = normalize({"hazards": "flood,sediment"})
     assert expand_hazard_keys(inputs.checkbox("hazards")) == [
         "flood",
@@ -306,5 +306,64 @@ def test_logic_run_returns_artifacts(network):
     maps = [n for n in names if n.endswith(".png")]
     assert len(maps) >= 1, names
     for artifact in result.artifacts:
-        # 源内へは Base64 で渡すので、復元できることを確認
+        # Base64 で受け渡すので、復元できることを確認
         assert base64.b64decode(base64.b64encode(artifact.data)) == artifact.data
+
+
+# --- 外部 API の一時的な失敗（実測で発生）--------------------------------
+
+
+def test_transient_connection_error_is_retried(monkeypatch):
+    """国土地理院は連続アクセスで接続を切ることがある。1回の失敗で診断を諦めない。"""
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"elevation": 1.4, "hsrc": "1m（レーザ）"}
+
+    def flaky_get(self, url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise gsi.httpx.ConnectError("[WinError 10054] 接続が切断されました")
+        return _Resp()
+
+    monkeypatch.setattr(gsi.httpx.Client, "get", flaky_get)
+    monkeypatch.setattr(gsi.time, "sleep", lambda _s: None)
+
+    result = gsi.elevation(34.07803, 134.56187)
+    assert result.value == 1.4, "再試行されず失敗している"
+    assert calls["n"] == 2, "1回目の失敗後に再試行していない"
+
+
+def test_gives_up_after_repeated_failures(monkeypatch):
+    """恒久的に落ちている場合は諦めて None を返す（無限に粘らない）。"""
+    calls = {"n": 0}
+
+    def always_fail(self, url, **kwargs):
+        calls["n"] += 1
+        raise gsi.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(gsi.httpx.Client, "get", always_fail)
+    monkeypatch.setattr(gsi.time, "sleep", lambda _s: None)
+
+    assert gsi.geocode("徳島市") is None
+    assert calls["n"] == gsi.RETRIES, f"再試行回数が想定と異なる: {calls['n']}"
+
+
+def test_http_404_is_not_retried(monkeypatch):
+    """404 は「データが無い」という正常な応答。再試行しない。"""
+    calls = {"n": 0}
+
+    class _NotFound:
+        status_code = 404
+
+    def not_found(self, url, **kwargs):
+        calls["n"] += 1
+        return _NotFound()
+
+    monkeypatch.setattr(gsi.httpx.Client, "get", not_found)
+    with gsi.create_client() as client:
+        assert gsi.fetch_tile("https://example.invalid/x.png", client) is None
+    assert calls["n"] == 1, "404 で無駄に再試行している"

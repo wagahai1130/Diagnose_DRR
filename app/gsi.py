@@ -16,12 +16,16 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 GEOCODE_URL = "https://msearch.gsi.go.jp/address-search/AddressSearch"
 ELEVATION_URL = "https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php"
@@ -31,6 +35,24 @@ HAZARD_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/{layer}/{z}/{x}/{y}.p
 TILE_SIZE = 256
 USER_AGENT = "genai-exapp/0.1 (disaster risk diagnosis)"
 TIMEOUT = 15.0
+
+# 国土地理院のサーバーは連続アクセスで接続を切ることがある（WinError 10054 等）。
+# 一時的な失敗と「データが無い」を区別するため、通信失敗のみ再試行する。
+RETRIES = 3
+RETRY_WAIT_SEC = 0.6
+
+
+def _get_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response | None:
+    """通信失敗のみ再試行する。応答が返れば（404 でも）そのまま返す。"""
+    for attempt in range(RETRIES):
+        try:
+            return client.get(url, **kwargs)
+        except httpx.HTTPError as exc:
+            if attempt == RETRIES - 1:
+                logger.warning("取得に失敗しました (%s): %s", url.split("?")[0], exc)
+                return None
+            time.sleep(RETRY_WAIT_SEC * (attempt + 1))
+    return None
 
 
 @dataclass
@@ -90,10 +112,11 @@ def geocode(query: str, client: httpx.Client | None = None) -> GeoPoint | None:
     owned = client is None
     client = client or create_client()
     try:
-        response = client.get(GEOCODE_URL, params={"q": query})
-        response.raise_for_status()
+        response = _get_with_retry(client, GEOCODE_URL, params={"q": query})
+        if response is None or response.status_code != 200:
+            return None
         results = response.json()
-    except (httpx.HTTPError, ValueError):
+    except ValueError:
         return None
     finally:
         if owned:
@@ -110,10 +133,13 @@ def elevation(lat: float, lon: float, client: httpx.Client | None = None) -> Ele
     owned = client is None
     client = client or create_client()
     try:
-        response = client.get(ELEVATION_URL, params={"lon": lon, "lat": lat, "outtype": "JSON"})
-        response.raise_for_status()
+        response = _get_with_retry(
+            client, ELEVATION_URL, params={"lon": lon, "lat": lat, "outtype": "JSON"}
+        )
+        if response is None or response.status_code != 200:
+            return Elevation(value=None)
         data = response.json()
-    except (httpx.HTTPError, ValueError):
+    except ValueError:
         return Elevation(value=None)
     finally:
         if owned:
@@ -132,11 +158,8 @@ def elevation(lat: float, lon: float, client: httpx.Client | None = None) -> Ele
 
 def fetch_tile(url: str, client: httpx.Client) -> Image.Image | None:
     """404（データなし）は None を返す。"""
-    try:
-        response = client.get(url)
-    except httpx.HTTPError:
-        return None
-    if response.status_code != 200:
+    response = _get_with_retry(client, url)
+    if response is None or response.status_code != 200:
         return None
     try:
         return Image.open(io.BytesIO(response.content)).convert("RGBA")

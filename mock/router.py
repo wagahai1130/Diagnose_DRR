@@ -1,15 +1,11 @@
-"""源内 Web の代役。ローカル開発用。
+"""診断画面。
 
-本物の源内 Web がやっていることを再現する:
-  1. リクエスト形式 JSON から入力フォームを自動生成する
-  2. x-api-key / x-user-id を付けて {"inputs": ...} を POST する
-  3. 202 + status_url が返ったら status_url をポーリングする
-  4. COMPLETED の outputs を Markdown として表示し、artifacts をダウンロードさせる
+  1. 入力定義 (app/schema.py) からフォームを自動生成する
+  2. 入力を API (/invoke) へ POST する
+  3. 202 が返ったら status_url をポーリングして完了を待つ
+  4. 結果の Markdown と地図を表示する
 
-加えて、本物にはない機能として応答の仕様違反を検出して表示する
-(app/conformance.py)。ここを緑にしてから本物の源内に登録すれば手戻りがない。
-
-本番デプロイでは EXAPP_MOCK=0 を設定してこのルーターを無効化すること。
+限定公開する場合は EXAPP_ACCESS_KEY を設定する（mock/access.py）。
 """
 
 from __future__ import annotations
@@ -26,7 +22,6 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app import conformance
 from app.schema import REQUEST_SCHEMA
 
 from . import access
@@ -35,7 +30,7 @@ router = APIRouter()
 
 INDEX_HTML = Path(__file__).with_name("index.html")
 
-# 本物の源内は 30 秒間隔でポーリングするが、開発中は待てないので短くする
+# 進捗確認の間隔
 POLL_INTERVAL_SEC = float(os.environ.get("MOCK_POLL_INTERVAL", "0.7"))
 POLL_TIMEOUT_SEC = float(os.environ.get("MOCK_POLL_TIMEOUT", "120"))
 
@@ -69,7 +64,7 @@ async def index(request: Request) -> HTMLResponse:
 
 
 def _resolve_status_url(status_url: str, endpoint: str) -> str:
-    """源内と同じく、status_url は同一オリジンの相対パスとして解決する。"""
+    """status_url は同一オリジンの相対パスとして解決する。"""
     parts = urlsplit(endpoint)
     return urlunsplit((parts.scheme, parts.netloc, "", "", "")) + status_url
 
@@ -95,9 +90,6 @@ async def run(request: Request) -> dict:
     def log(label: str, detail: str = "") -> None:
         timeline.append({"at": round(time.monotonic() - started, 2), "label": label, "detail": detail})
 
-    # 本番登録時に効いてくる URL 制約は警告として出す（ローカルの http は当然引っかかる）
-    deploy_warnings = conformance.check_endpoint_url(endpoint)
-
     body = {"inputs": inputs, "sessionId": session_id}
     headers = {
         "Content-Type": "application/json",
@@ -115,7 +107,6 @@ async def run(request: Request) -> dict:
                 "ok": False,
                 "timeline": timeline,
                 "violations": [f"エンドポイントに接続できません: {exc}"],
-                "deployWarnings": deploy_warnings,
             }
 
         elapsed = time.monotonic() - started
@@ -126,10 +117,9 @@ async def run(request: Request) -> dict:
 
         log(f"HTTP {response.status_code}", f"{elapsed:.2f} 秒")
 
-        mode, problems = conformance.check_invoke_response(
-            response.status_code, response_body, elapsed_sec=elapsed
-        )
-        violations += problems
+        mode = "async" if response.status_code == 202 else "sync"
+        if response.status_code >= 400:
+            violations.append(f"API が {response.status_code} を返した。")
 
         if mode != "async":
             return {
@@ -139,13 +129,12 @@ async def run(request: Request) -> dict:
                 "result": response_body,
                 "timeline": timeline,
                 "violations": violations,
-                "deployWarnings": deploy_warnings,
                 "sessionId": session_id,
             }
 
         # --- ここから非同期のポーリング ---
-        status_url = response_body.get("status_url")
-        if conformance.check_status_url(status_url):
+        status_url = response_body.get("status_url") if isinstance(response_body, dict) else None
+        if not isinstance(status_url, str) or not status_url.startswith("/"):
             return {
                 "ok": False,
                 "mode": "async",
@@ -153,7 +142,6 @@ async def run(request: Request) -> dict:
                 "result": response_body,
                 "timeline": timeline,
                 "violations": violations,
-                "deployWarnings": deploy_warnings,
                 "sessionId": session_id,
             }
 
@@ -167,8 +155,7 @@ async def run(request: Request) -> dict:
         while True:
             if time.monotonic() > deadline:
                 violations.append(
-                    f"{POLL_TIMEOUT_SEC:.0f} 秒待っても終了状態になりませんでした。"
-                    " 本物の源内は最大 96 時間待ちますが、開発中は打ち切ります。"
+                    f"{POLL_TIMEOUT_SEC:.0f} 秒待っても診断が終了しなかった。"
                 )
                 log("タイムアウト")
                 break
@@ -187,12 +174,11 @@ async def run(request: Request) -> dict:
             except ValueError:
                 status_body = status_response.text
 
-            job_status, problems = conformance.check_status_response(
-                status_response.status_code, status_body
+            job_status = (
+                status_body.get("status", "") if isinstance(status_body, dict) else ""
             )
-            for problem in problems:
-                if problem not in violations:
-                    violations.append(problem)
+            if status_response.status_code >= 400:
+                violations.append(f"進捗確認が {status_response.status_code} を返した。")
 
             if isinstance(status_body, dict):
                 progress = str(status_body.get("progress") or "")
@@ -216,6 +202,5 @@ async def run(request: Request) -> dict:
             "result": status_body,
             "timeline": timeline,
             "violations": violations,
-            "deployWarnings": deploy_warnings,
             "sessionId": session_id,
         }

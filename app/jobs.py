@@ -27,7 +27,7 @@ ERROR = "ERROR"
 
 
 def _now() -> str:
-    # 源内側は ISO8601 (末尾 Z) を想定
+    # ISO8601 (末尾 Z)
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
@@ -43,7 +43,7 @@ class Job:
     updated_at: str = field(default_factory=_now)
 
     def to_status_response(self) -> dict:
-        """源内 Web がポーリングで期待する形。"""
+        """進捗確認の応答。"""
         body: dict = {
             "request_id": self.request_id,
             "status": self.status,
@@ -107,7 +107,7 @@ class JobStore:
                 outputs=result.outputs,
                 artifacts=artifacts,
             )
-        except Exception as exc:  # noqa: BLE001 - 失敗理由を源内側へ返すため握る
+        except Exception as exc:  # noqa: BLE001 - 失敗理由を呼び出し元へ返すため握る
             traceback.print_exc()
             self._update(
                 job,

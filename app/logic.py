@@ -1,4 +1,4 @@
-"""AI アプリの中身 — 災害リスク診断。
+"""診断処理の組み立て。
 
 住所から、標高・浸水想定・土砂災害警戒区域を国土地理院の公開データで調べ、
 その地点固有のリスクを日本語で説明する。地図画像とレポートを artifact で返す。
@@ -10,17 +10,18 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from . import diagnose, narrative
+from . import diagnose, mapstore, narrative
 from .normalize import Inputs
 from .schema import expand_hazard_keys
 
 
 @dataclass
 class Artifact:
-    """生成ファイル。源内 Web ではダウンロードリンクとして表示される。"""
+    """生成ファイル。画面ではダウンロードリンクまたは画像として表示される。"""
 
     display_name: str
     data: bytes
@@ -82,6 +83,8 @@ def run(inputs: Inputs, user_id: str, progress: ProgressFn = lambda _: None) -> 
     except (TypeError, ValueError):
         floor = None
 
+    public_url = os.environ.get("EXAPP_PUBLIC_URL", "").rstrip("/")
+
     result = diagnose.run(
         query=address,
         layer_keys=expand_hazard_keys(inputs.checkbox("hazards")),
@@ -90,6 +93,14 @@ def run(inputs: Inputs, user_id: str, progress: ProgressFn = lambda _: None) -> 
         conditions_note=str(inputs.get("conditions_note") or ""),
         progress=progress,
     )
+
+    # 地図を配信できるようにして、レポート本文に画像として埋め込む。
+    # 公開 URL が未設定なら埋め込まない（相対パスでは源内側で画像にならないため）。
+    if public_url and result.maps:
+        result.map_urls = [
+            (name, f"{public_url}/maps/{mapstore.store.put(png)}.png")
+            for name, png in result.maps
+        ]
 
     report = narrative.render_report(result)
     if not result.ok:
