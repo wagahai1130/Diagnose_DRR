@@ -1,7 +1,7 @@
 fastapi==0.141.1
 uvicorn[standard]==0.52.3
 httpx==0.28.1
-Pillow==12.3.0
+Pillow==13.0.0
 pytest==9.1.1
 
 # 文章生成に Claude API を使う場合のみ必要（ANTHROPIC_API_KEY が無ければテンプレート文で動く）
